@@ -1,113 +1,148 @@
-import java.io.BufferedReader;
+import java.io.DataInputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
 import java.io.PrintWriter;
-import java.net.ServerSocket;
 import java.net.Socket;
-import java.net.UnknownHostException;
 
 public class WebSocket 
 {
 	private Socket socket;
+	private final static String USER_AGENT = "Mozilla/5.0";
 	
 	public WebSocket(Socket socket)
 	{
 		this.socket = socket;
 	}
 	
-	public void sendRequest(String path)
-	{ 
-		try 
-		{
-			OutputStream out = socket.getOutputStream();
-			PrintWriter pw = new PrintWriter(out);
-			
-			//pw.print(payload);
-			pw.print("GET " + path /*+ " HTTP/1.1\r\n"*/);
-	       // pw.print("Host: "+ "www.google.com" + ":" + socket.getPort() +"\r\n");
-	        pw.print("\r\n");
-	        pw.flush();
-	        //out.close();
-		} 
-		catch (IOException e) 
-		{
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		}
+	public WebSocket()
+	{
+		
 	}
 	
-	public String getResponse()
+	public byte[] sendRequest(String body) throws IOException
 	{
-		StringBuilder response = new StringBuilder();
+		String host = getHost(body);
+		int port = getPort(body);
+		Socket client = new Socket(host, port);
 		
-		InputStream in;
-		try
+		if(getMethod(body).contains("CONNECT"))
 		{
-			in = socket.getInputStream();
-		
-			BufferedReader br = new BufferedReader(new InputStreamReader(in));
-			
-			String str;
-			while(!(str = br.readLine()).equals(""))
-			{
-				response.append(str+"\r\n");
-			}
-			response.append("\r\n\r\n");
-			while((str = br.readLine())!=null)
-			{
-				response.append(str+"\r\n");
-			}
-			
-		} 
-		catch (IOException e) 
-		{
-			// TODO Auto-generated catch block
-			e.printStackTrace();
+			return "200 OK\r\n\r\n".getBytes();
 		}
-		return response.toString();
-	}
-	
-	public static void main(String[] str) throws UnknownHostException, IOException
-	{
-		ServerSocket proxyServer = new ServerSocket(1111);
-		while(true)
-		{
+		//System.out.println(host);
+		body = body.replace("http://"+host,"");
 		
-		Socket client = proxyServer.accept();
-		InputStream clientInputStream= client.getInputStream();
+		PrintWriter pw = new PrintWriter(client.getOutputStream(),false);
+		//System.out.println(body);
+	    pw.print(body);
+		pw.print("\r\n");
+		pw.flush();
 		
-		BufferedReader clientReader = new BufferedReader(new InputStreamReader(clientInputStream));
-		String clientRequest = new String();
-		StringBuilder clientRequestBuilder = new StringBuilder();
+		String str = new String();
+				
+		DataInputStream in = new DataInputStream(client.getInputStream());
 		
-		while(!(clientRequest = clientReader.readLine()).equals(""))
-		{
-			clientRequestBuilder.append(clientRequest+"\r\n");
-		}
-		System.out.println(clientRequestBuilder.toString());
+        // Reads the http header.
+        
+        StringBuilder header = new StringBuilder("");
+        
+        byte[] byteData = null;
+    
+        int ch;
+        do
+        {
+        	str = "";
+	        while((ch = in.read())!=13)
+	        {
+	        	str+=(char)ch;
+	        }
+	        header.append(str+"\n");
+	        in.read();
+        }while(!str.equals(""));           //End the http header.
+        
+        //System.out.println(header.toString());
+        // if header has not found error return header.
+        if(header.indexOf("HTTP/1.1 404 Not Found") != -1)
+        	return ("HTTP/1.1 200 OK" + "\r\n\r\n<html>Page not found</html>").getBytes();
+ 
+        // gets the content length from the header.
+       	int contentLengthStartIndex = header.indexOf("Content-Length:") + "Content-Length:".length() + 1;
+    	int contentLengthEndIndex = header.indexOf("\n",contentLengthStartIndex);
+    	int contentLength = Integer.parseInt(header.toString().substring(contentLengthStartIndex, contentLengthEndIndex));
+   	
+    	//read the data.
+    	int readData;
+    	byteData = new byte[contentLength];
+    	int count = 0;
+    	
+    	while(count<contentLength)
+    	{
+    		readData = in.read();
+    		byteData[count++] = (byte)readData;    		
+    	}
 		
-		System.out.println("Host:"+getHost(clientRequestBuilder.toString().split("\r\n")[0]));
-		
-		WebSocket ws = new WebSocket(new Socket("www.youtube.com", 80));
-		ws.sendRequest("");
-		String proxyResponse = ws.getResponse();
-		System.out.println("Proxy Response: " + proxyResponse);
-		
-		PrintWriter clientResponse = new PrintWriter(client.getOutputStream(),false);
-		//clientResponse.println("HTTP/1.1 200 OK");
-		clientResponse.print(proxyResponse);
-		clientResponse.print("\r\n\r\n");
-		clientResponse.flush();
-		clientResponse.close();
-		client.close();
-		
-		}
+    	byte[] returnData = new byte[header.length() + byteData.length + 5];
+    	
+    	for(int i = 0;i < header.length() ; i++)
+    	{
+    		returnData[i] = (byte) header.charAt(i);
+    	}
+    	
+    	for(int i = 0;i < byteData.length ; i++)
+    	{
+    		returnData[i + header.length()] = byteData[i];
+    	}    	
+    
+		return returnData;
 	}
 	
 	private static String getHost(String request)
 	{
-		return request.substring(request.indexOf("/") + 1, request.indexOf("HTTP") - 1);	
+		String[] lines = request.split("\r\n");
+		
+		for(String line : lines)
+		{
+			if(line.contains("Host"))
+			{
+				String hostName = line.split(" ")[1];
+		
+				if(hostName.contains(":"))
+				{
+					return hostName.substring(0, hostName.indexOf(":"));
+				}
+				else
+				{
+					return hostName;
+				}
+			}
+		}
+		return null;
+	}
+	
+	private static int getPort(String request)
+	{
+		String[] lines = request.split("\r\n");
+		
+		for(String line : lines)
+		{
+			if(line.contains("Host"))
+			{
+				String hostName = line.split(" ")[1];
+		
+				if(hostName.contains(":"))
+				{
+					return Integer.parseInt(hostName.substring(hostName.indexOf(":")+1));
+				}
+				else
+				{
+					return 80;
+				}
+			}
+		}
+		return 80;
+	}
+	
+	private static String getMethod(String request)
+	{
+		return request.split(" ")[0];
 	}
 }
